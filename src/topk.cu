@@ -254,18 +254,7 @@ t2_1.stop();
 #endif
 
     std::vector<int> h_doc_lens_vec(n_docs);
-#if 1
-    std::vector<Task*> host_copy_tasks(num_threads, nullptr);
-    // size_t n_docs_per_threads = (n_docs + num_threads - 1) / num_threads;
-    offset = 0;
-    for (int i = 0; i < num_threads; ++i) {
-        int size = min(n_docs_per_threads, n_docs - offset);
-        int end = offset + size;
-        host_copy_tasks[i] = new HostCopyTask(offset, end, h_doc_lens_vec, h_docs, docs);
-        offset += n_docs_per_threads;
-    }
-    pool.run_task(host_copy_tasks);
-#else
+#if 0
     for (int i = 0; i < docs.size(); i++) {
         for (int j = 0; j < docs[i].size(); j++) {
             auto group_sz = sizeof(group_t) / sizeof(uint16_t);
@@ -279,6 +268,17 @@ t2_1.stop();
         }
         h_doc_lens_vec[i] = docs[i].size();
     }
+#else
+    std::vector<Task*> host_copy_tasks(num_threads, nullptr);
+    // size_t n_docs_per_threads = (n_docs + num_threads - 1) / num_threads;
+    offset = 0;
+    for (int i = 0; i < num_threads; ++i) {
+        int size = min(n_docs_per_threads, n_docs - offset);
+        int end = offset + size;
+        host_copy_tasks[i] = new HostCopyTask(offset, end, h_doc_lens_vec, h_docs, docs);
+        offset += n_docs_per_threads;
+    }
+    pool.run_task(host_copy_tasks);
 #endif
 
 #ifdef MYTIME
