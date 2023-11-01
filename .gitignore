@@ -1,3 +1,7 @@
 translate
 *.nsys-rep
 *.qdstrm
+*.sqlite
+*.zip
+*.log
+bin

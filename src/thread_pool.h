@@ -180,12 +180,12 @@ public:
     }
 
     size_t num_threads() {
-        return _workers.size() + 1;
+        return _workers.size();
     }
 
     void set_num_threads(size_t nt) {
-        assert(nt > 1);
-        size_t total_worker = nt - 1;
+        assert(nt >= 1);
+        size_t total_worker = nt;
         if (_workers.size() >= total_worker) {
             return;
         }
@@ -193,24 +193,20 @@ public:
         while (_workers.size() < total_worker) {
             _workers.push_back(new Worker(&_barrier));
         }
-        _barrier.wait();
     }
 
     void run_task(const std::vector<Task*>& tasks) {
         assert(tasks.size() >= 1);
         set_num_threads(tasks.size());
-        std::size_t workers_count = tasks.size() - 1;
+        std::size_t workers_count = tasks.size();
         _barrier.reset(workers_count);
         for (size_t i = 0; i < workers_count; ++i) {
             _workers[i]->run_task(tasks[i]);
         }
-        Task* task = tasks.back();
-        task->run();
+    }
 
+    void wait() {
         _barrier.wait();
-        for (Task* entry : tasks) {
-            delete entry;
-        }
     }
 
 private:

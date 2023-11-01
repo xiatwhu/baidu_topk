@@ -12,3 +12,81 @@ base 代码，得分 0.00019，本地 1220ms
 
 (5) 第五次提交
 将 topk 的计算移到 gpu 上计算。得分 0.00050，本地 535ms。可以推测出服务端 gpu 性能更好，cpu 单核性能更差。
+
+
+
+（1）v1
+base 版本，512，batch 1
+
+(2) v2
+512, batch 4
+
+(3) v3
+512, batch 5
+
+(4) v4
+256, batch 1
+
+(5) v5
+256, batch 4
+
+(6) v6
+512, batch 4, launch_bounds
+
+(7) v7
+256, batch 4, launch_bounds
+
+(8) v8
+512, batch 4, launch_bounds, pipeline
+
+(9) v9
+256, batch 4, launch_bounds, pipeline
+
+(10) v10
+512, batch 4, launch_bounds, shared memory
+
+(11) v11
+256, batch 4, launch_bounds, shared memory
+
+
+
+
+(0) base 版本
+2000 个 query, 26158ms
+
+(1) 优化点一: 多线程多流并行
+2000 个 query, 8031ms, 8 个线程
+
+(2) 优化点二: 将 query 转换为 bitset
+2000 个 query, 6472ms
+
+(3) 优化点三: 优化 topk
+2000 个 query, 4086ms
+
+std::partial_sort | float | 10.40ms
+std::partial_sort | int16 | 5.35ms
+cub::DeviceRadixSort | float | 1.59ms
+cub::DeviceRadixSort | int16 | 0.72ms
+cub::DeviceRadixSort | half | 0.73ms
+pytorch::topk     | float | 0.44ms(1), 0.69ms(2), 1.05ms(3), 1.31ms(4)
+pytorch::topk     | int16 | 0.24ms(1), 0.35ms(2), 0.52ms(3), 0.64ms(4)
+pytorch::topk     | half  | 0.25ms(1), 0.36ms(2), 0.54ms(3), 0.66ms(4)
+
+(4) 优化点四: batch 优化
+2000 个 query, 1448ms
+
+(5) 优化点五: shared memory 排列优化
+减少 shared memory 访存次数，减少 bank conflict
+2000 个 query, 1410ms
+
+(6) 优化点六: 对 query 按照 max_token 进行排序
+2000 个 query, 1374ms
+
+(7) 优化点七: popc 指令
+2000 个 query, 1370ms
+
+(8) 优化点八: 基于 thresh 的提前返回策略
+2000 个 query, 2434ms
+
+(9) 优化点九: 基于 thresh 的 batch 方案
+2000 个 query, 1106ms

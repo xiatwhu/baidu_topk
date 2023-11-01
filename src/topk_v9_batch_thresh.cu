@@ -10,8 +10,6 @@
 
 #include <emmintrin.h>
 #include <mmintrin.h>
-#include <immintrin.h>
-#include <smmintrin.h>
 
 #include "fast_topk.cuh"
 
