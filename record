@@ -73,17 +73,17 @@ pytorch::topk     | int16 | 0.24ms(1), 0.35ms(2), 0.52ms(3), 0.64ms(4)
 pytorch::topk     | half  | 0.25ms(1), 0.36ms(2), 0.54ms(3), 0.66ms(4)
 
 (4) 优化点四: batch 优化
-2000 个 query, 1448ms
+2000 个 query, 1360ms
 
 (5) 优化点五: shared memory 排列优化
 减少 shared memory 访存次数，减少 bank conflict
-2000 个 query, 1410ms
+2000 个 query, 1329ms
 
 (6) 优化点六: 对 query 按照 max_token 进行排序
-2000 个 query, 1374ms
+2000 个 query, 1295ms
 
 (7) 优化点七: popc 指令
-2000 个 query, 1370ms
+2000 个 query, 1291ms
 
 (8) 优化点八: 基于 thresh 的提前返回策略
 2000 个 query, 2434ms

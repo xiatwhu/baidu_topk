@@ -461,14 +461,13 @@ __global__ void gatherTopK(T* input,
 
 struct CudaDevicePropSingleton {
 CudaDevicePropSingleton() {
-    cudaSetDevice(0);
-    cudaFree(0);
     cudaGetDeviceProperties(&prop, 0);
 }
 cudaDeviceProp prop;
-} prop_singleton;
+};
 
 cudaDeviceProp* getCurrentDeviceProperties() {
+    static CudaDevicePropSingleton prop_singleton;
     return &prop_singleton.prop;
 }
 

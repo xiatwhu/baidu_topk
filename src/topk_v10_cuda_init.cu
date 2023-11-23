@@ -79,7 +79,6 @@ void __global__ docQueryScoringCoalescedMemoryAccessSampleKernel(
     int stride = gridDim.x * blockDim.x;
 
     __shared__ uint32_t query_mask[N * query_mask_size];
-    // __shared__ group_t doc_cache[N_THREADS_IN_ONE_BLOCK];
 
     int threadid = threadIdx.x;
 
@@ -104,10 +103,18 @@ void __global__ docQueryScoringCoalescedMemoryAccessSampleKernel(
             for (auto j = 0; j < 8; ++j) {
                 uint16_t tindex = token[j] >> 5;
                 uint16_t tpos = token[j] & 31;
+                uint32_t tmask = (1u) << tpos;
+
+                using pack = typename PackData<N>::dtype;
+                pack mask = ((pack*)(query_mask))[tindex];
+                uint32_t* mask_ptr = (uint32_t*)(&mask);
 
                 #pragma unroll
                 for (auto k = 0; k < N; ++k) {
-                    tmp_score[k] += (query_mask[k * query_mask_size + tindex] >> tpos) & 0x01;
+                    // 通过对比, 发现 __popc 比 bfe 和 位操作的版本都会快一点
+                    // tmp_score[k] += (mask_ptr[k] >> tpos) & 0x01;
+                    // tmp_score[k] += getBitfield(mask_ptr[k], tpos, 1);
+                    tmp_score[k] += __popc(mask_ptr[k] & tmask);
                 }
             }
 
@@ -135,8 +142,9 @@ void search_topk(
         Pair* h_topk,
         uint32_t* h_query,
         uint16_t* h_query_len,
-        std::vector<std::vector<uint16_t>> &querys,
-        std::vector<std::vector<int>> &indices,
+        std::vector<int>& query_idx,
+        std::vector<std::vector<uint16_t>>& querys,
+        std::vector<std::vector<int>>& indices,
         int start,
         int batch,
         cudaStream_t stream) {
@@ -145,13 +153,13 @@ void search_topk(
     memset(h_query, 0, sizeof(uint32_t) * cur_batch * query_mask_size);
     uint16_t max_query_token = 0;
     for (int j = 0; j < cur_batch; ++j) {
-        auto& query = querys[start + j];
+        auto& query = querys[query_idx[start + j]];
         h_query_len[j] = query.size();
         for (auto& q : query) {
             uint16_t index = q >> 5;
             uint16_t postion = q & 31;
-            h_query[j * query_mask_size + index] |= ((1u) << postion);
-            // h_query[cur_batch * index + j] |= ((1u) << postion);
+            // h_query[j * query_mask_size + index] |= ((1u) << postion);
+            h_query[cur_batch * index + j] |= ((1u) << postion);
         }
         max_query_token = std::max(max_query_token, query.back());
     }
@@ -202,7 +210,7 @@ void search_topk(
         for (int k = 0; k < TOPK; ++k) {
             s_ans[k] = cur_topk[k].index;
         }
-        indices[start + j] = std::move(s_ans);
+        indices[query_idx[start + j]] = std::move(s_ans);
     }
 }
 
@@ -237,16 +245,30 @@ struct Timer {
 #endif
 
 struct Context {
-    Context() = default;
+    Context() : cuda_inited(false) {}
 
     void init(int n_docs, int num_threads) {
 Timer t("init");
         pool.set_num_threads(num_threads);
-        
+        thread_contexts.resize(num_threads);
+
+t.stop("cuda_malloc_host");
+        auto ret = posix_memalign((void**)(&h_mem), 256, sizeof(uint16_t) * 128 * n_docs);
+        (void)(ret);
+
+        // 初始化指针
+        h_docs = reinterpret_cast<uint16_t*>(h_mem);
+
+t.stop("thread_pool");
+        pool.wait();
+t.stop();
+    }
+
+    void init_cuda(int n_docs, int num_threads) {
+Timer t("cuda_init");
         CHECK_CUDA(cudaSetDevice(0));
         CHECK_CUDA(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
-        thread_contexts.resize(num_threads);
         for (int i = 0; i < num_threads; ++i) {
             CHECK_CUDA(cudaStreamCreateWithFlags(&thread_contexts[i].stream, cudaStreamNonBlocking));
         }
@@ -264,24 +286,33 @@ t.stop("cuda_malloc_device");
             bytes += align_bytes(default_sort_storage);                             // d_temp_storage
         }
         CHECK_CUDA(cudaMalloc(&d_mem, bytes));
-
-t.stop("cuda_malloc_host");
-        auto ret = posix_memalign((void**)(&h_mem), 256, sizeof(uint16_t) * 128 * n_docs);
-        (void)(ret);
-
-        int8_t* h_mem_pool = h_mem;
         int8_t* d_mem_pool = d_mem;
-        // 初始化指针
-        h_docs = reinterpret_cast<uint16_t*>(h_mem_pool);
-        h_mem_pool += align_bytes(sizeof(uint16_t) * 128 * n_docs);
 
         d_docs = reinterpret_cast<uint16_t*>(d_mem_pool);
         d_mem_pool += align_bytes(sizeof(uint16_t) * 128 * n_docs);
+
+        // 通知拷贝线程, d_docs 已经就绪了，可以开始拷贝了
+        cuda_inited = true;
+
         d_doc_lens = reinterpret_cast<uint16_t*>(d_mem_pool);
         d_mem_pool += align_bytes(sizeof(uint16_t) * n_docs);
 
+        // 计算需要分配的 pinned 内存大小
+        // 由于 cudaMallocHost 分配大块内存时特别耗时, 所以 h_docs 空间使用 malloc 分配
+        bytes = 0u;
+        
+        for (int i = 0; i < num_threads; ++i) {
+            bytes += align_bytes(sizeof(Pair) * max_batch * TOPK);                  // h_topk
+            bytes += align_bytes(sizeof(uint32_t) * max_batch * query_mask_size);   // h_query
+            bytes += align_bytes(sizeof(uint32_t) * max_batch);                     // h_query_len
+        }
+        CHECK_CUDA(cudaMallocHost(&h_pinned_mem, bytes));
+
+        int8_t* h_pinned_mem_pool = h_pinned_mem;
+
         for (int i = 0; i < num_threads; ++i) {
             ThreadContext& ctx = thread_contexts[i];
+
             ctx.d_scores = reinterpret_cast<int16_t*>(d_mem_pool);
             d_mem_pool += align_bytes(sizeof(int16_t) * max_batch * n_docs);
             ctx.d_topk = reinterpret_cast<Pair*>(d_mem_pool);
@@ -292,30 +323,6 @@ t.stop("cuda_malloc_host");
             d_mem_pool += align_bytes(sizeof(uint16_t) * max_batch);
             ctx.d_temp_storage = reinterpret_cast<void*>(d_mem_pool);
             d_mem_pool += align_bytes(default_sort_storage);
-        }
-t.stop("thread_pool");
-        pool.wait();
-t.stop();
-    }
-
-    void init_pinned(int n_docs, int num_threads) {
-Timer t("cuda_malloc_pinned");
-        // 计算需要分配的 pinned 内存大小
-        // 由于 cudaMallocHost 分配大块内存时特别耗时, 所以 h_docs 空间使用 malloc 分配
-        size_t bytes = 0u;
-        
-        for (int i = 0; i < num_threads; ++i) {
-            bytes += align_bytes(sizeof(Pair) * max_batch * TOPK);                  // h_topk
-            bytes += align_bytes(sizeof(uint32_t) * max_batch * query_mask_size);   // h_query
-            bytes += align_bytes(sizeof(uint32_t) * max_batch);                     // h_query_len
-            // bytes += align_bytes(sizeof(uint16_t) * 1 * n_docs);                    // h_scores
-        }
-        CHECK_CUDA(cudaMallocHost(&h_pinned_mem, bytes));
-
-        int8_t* h_pinned_mem_pool = h_pinned_mem;
-
-        for (int i = 0; i < num_threads; ++i) {
-            ThreadContext& ctx = thread_contexts[i];
 
             ctx.h_topk = reinterpret_cast<Pair*>(h_pinned_mem_pool);
             h_pinned_mem_pool += align_bytes(sizeof(Pair) * max_batch * TOPK);
@@ -323,8 +330,6 @@ Timer t("cuda_malloc_pinned");
             h_pinned_mem_pool += align_bytes(sizeof(uint32_t) * max_batch * query_mask_size);
             ctx.h_query_len = reinterpret_cast<uint16_t*>(h_pinned_mem_pool);
             h_pinned_mem_pool += align_bytes(sizeof(uint16_t) * max_batch);
-            // ctx.h_scores = reinterpret_cast<int16_t*>(h_pinned_mem_pool);
-            // h_pinned_mem_pool += align_bytes(sizeof(int16_t) * 1 * n_docs);
         }
 t.stop();
     }
@@ -334,7 +339,6 @@ t.stop();
             cudaFree(d_mem);
         }
         if (h_mem) {
-            // cudaFreeHost(h_mem);
             free(h_mem);
         }
 
@@ -375,6 +379,7 @@ t.stop();
     uint16_t* d_docs = nullptr;             // [16, n_docs, 8]
     uint16_t* d_doc_lens = nullptr;         // [n_docs]
     std::vector<ThreadContext> thread_contexts;
+    std::atomic<bool> cuda_inited;
 };
 
 struct HostCopyTask : public Task {
@@ -430,6 +435,12 @@ Timer t("host_copy");
                 _mm_store_si128((__m128i*)(h_docs + offset), a);
             }
         }
+t.stop(("wait_cuda_" + std::to_string(id)).c_str());
+
+        while (!ctx.cuda_inited.load()) {
+            do_some_nops();
+        }
+
 t.stop("device_copy");
 
         // [16, n_docs_pad, 8]
@@ -516,6 +527,7 @@ struct TopkTask : public Task {
                         h_topk,
                         h_query,
                         h_query_len,
+                        query_idx,
                         querys,
                         indices,
                         i,
@@ -570,7 +582,7 @@ t.stop("pre_thread_pool");
     }
     pool.run_task(tasks);
 
-    ctx.init_pinned(n_docs_pad, num_threads);
+    ctx.init_cuda(n_docs_pad, num_threads);
 
     // 线程池在处理 d_docs 时, 主线程处理其他耗时的操作
 t.stop("pre_init_cuda");
@@ -581,6 +593,7 @@ t.stop("pre_init_cuda");
             [&querys](int a, int b) {
                 return querys[a].back() < querys[b].back();
             });
+
 t.stop("pre_malloc_device");
     cudaStream_t stream = ctx.stream;
     uint16_t* d_docs = ctx.d_docs;
@@ -599,8 +612,8 @@ t.stop("pre_memcpy_device");
     // 等待线程池完成 docs-> h_docs -> d_docs 的任务
     pool.wait();
 t.stop("topk");
-    if (false) {
-    // if (true) {
+    // if (false) {
+    if (true) {
         // 单线程处理 query
         Context::ThreadContext& tctx = ctx.thread_contexts[0];
         int16_t* d_scores = tctx.d_scores;
@@ -628,6 +641,7 @@ t.stop("topk");
                         h_topk,
                         h_query,
                         h_query_len,
+                        query_idx,
                         querys,
                         indices,
                         i,

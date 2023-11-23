@@ -605,8 +605,8 @@ t.stop("pre_memcpy_device");
     // 等待线程池完成 docs-> h_docs -> d_docs 的任务
     pool.wait();
 t.stop("topk");
-    // if (false) {
-    if (true) {
+    if (false) {
+    // if (true) {
         // 单线程处理 query
         Context::ThreadContext& tctx = ctx.thread_contexts[0];
         int16_t* d_scores = tctx.d_scores;

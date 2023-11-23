@@ -21,7 +21,5 @@ if [ -z "$query_dir" ]; then
         query_dir=./translate/querys
 fi
 
-chmod +x $ROOT_DIR/numactl
-
-$ROOT_DIR/numactl --cpunodebind=0 --membind=0 $ROOT_DIR/bin/query_doc_scoring ${doc_file} ${query_dir} ${output_file}
+$ROOT_DIR/bin/query_doc_scoring ${doc_file} ${query_dir} ${output_file}
 echo "run success"
