@@ -280,6 +280,7 @@ void doc_query_scoring_gpu_function(std::vector<std::vector<uint16_t>> &querys,
 Timer t("pre_process");
 
     // copy to device
+    cudaMalloc(&d_query, sizeof(uint32_t) * query_mask_size);
     cudaMalloc(&d_docs, sizeof(uint16_t) * MAX_DOC_SIZE * n_docs);
     cudaMalloc(&d_scores, sizeof(int16_t) * n_docs);
     cudaMalloc(&d_doc_lens, sizeof(int) * n_docs);

@@ -14,43 +14,6 @@ base 代码，得分 0.00019，本地 1220ms
 将 topk 的计算移到 gpu 上计算。得分 0.00050，本地 535ms。可以推测出服务端 gpu 性能更好，cpu 单核性能更差。
 
 
-
-（1）v1
-base 版本，512，batch 1
-
-(2) v2
-512, batch 4
-
-(3) v3
-512, batch 5
-
-(4) v4
-256, batch 1
-
-(5) v5
-256, batch 4
-
-(6) v6
-512, batch 4, launch_bounds
-
-(7) v7
-256, batch 4, launch_bounds
-
-(8) v8
-512, batch 4, launch_bounds, pipeline
-
-(9) v9
-256, batch 4, launch_bounds, pipeline
-
-(10) v10
-512, batch 4, launch_bounds, shared memory
-
-(11) v11
-256, batch 4, launch_bounds, shared memory
-
-
-
-
 (0) base 版本
 2000 个 query, 26158ms
 

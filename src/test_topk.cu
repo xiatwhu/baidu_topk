@@ -7,7 +7,7 @@
 #include <cub/cub.cuh>
 #include <cuda_fp16.hpp>
 
-#include "topk.cuh"
+#include "fast_topk.cuh"
 
 template <typename T>
 void test_topk() {
