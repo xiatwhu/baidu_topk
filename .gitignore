@@ -5,3 +5,4 @@ translate
 *.zip
 *.log
 bin
+.DS_Store
